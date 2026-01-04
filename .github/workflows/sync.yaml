@@ -1,0 +1,60 @@
+name: 同步
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+env:
+  TUNNEL_CONFIG: ${{ secrets.TUNNEL_CONFIG }}
+  SSH_KEY: ${{ secrets.SSH_KEY }}
+  MY_HOSTNAME: ${{ secrets.MY_HOSTNAME }}
+  MY_GIT_PORT: ${{ secrets.MY_GIT_PORT }}
+  MY_REG_PORT: ${{ secrets.MY_REG_PORT }}
+  MY_DAV_PORT: ${{ secrets.MY_DAV_PORT }}
+  MY_NAME: ${{ secrets.MY_NAME }}
+  WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
+  WEBDAV_PASSWD: ${{ secrets.WEBDAV_PASSWD }}
+  TUNNEL_BIN: ${{ secrets.TUNNEL_BIN}}
+
+jobs:
+  Build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@master
+
+      - name: Setup Tunnel
+        run: |
+          wget -q $TUNNEL_BIN -O mihomo.deb
+          sudo apt-get -qq -y install ./mihomo.deb &> /dev/null
+          nohup mihomo -config $TUNNEL_CONFIG &> /dev/null &
+
+      - name: Setup KEY
+        run: |
+          echo "127.0.0.1 $MY_HOSTNAME" | sudo tee -a /etc/hosts &> /dev/null
+          mkdir ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          ssh-keyscan -p $MY_GIT_PORT $MY_HOSTNAME >> ~/.ssh/known_hosts 2>/dev/null
+          sudo chmod 600 ~/.ssh/id_ed25519
+
+      - name: Setup WebDAV
+        run: |
+          sudo apt-get -qq -y install davfs2 &> /dev/null
+          sudo mkdir /mnt/webdav
+          echo "http://$MY_HOSTNAME:$MY_DAV_PORT/ /mnt/webdav davfs rw,user,noauto,uid=$(id -u),gid=$(id -g) 0 0" | sudo tee -a /etc/fstab &> /dev/null
+          echo "http://$MY_HOSTNAME:$MY_DAV_PORT/ $WEBDAV_USER $WEBDAV_PASSWD" | sudo tee -a /etc/davfs2/secrets &> /dev/null
+          sudo mount /mnt/webdav
+
+      - name: Sync
+        continue-on-error: true
+        env:
+          SYNC_CMD: ${{ secrets.SYNC_CMD }}
+        run: |
+          pwsh -EncodedCommand $SYNC_CMD
+
+      - name: Unmount WebDAV
+        run: |
+          sudo umount /mnt/webdav
